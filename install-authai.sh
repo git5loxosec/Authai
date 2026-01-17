@@ -357,3 +357,24 @@ echo 'unzip -t "$APK" | tail -n 5'
 echo
 echo "======================================"
 echo
+echo
+echo "======================================"
+echo " Move APK to Downloads"
+echo "======================================"
+echo
+echo 'cp -f "$FINAL" "$HOME/storage/downloads/'"${APPNAME,,}"'-signed.apk"'
+echo
+echo
+echo "======================================"
+echo " Install APK (GUI)"
+echo "======================================"
+echo
+echo 'termux-open "$HOME/storage/downloads/'"${APPNAME,,}"'-signed.apk"'
+echo
+echo
+echo "======================================"
+echo " Install APK (ADB)"
+echo "======================================"
+echo
+echo 'adb install -r "$HOME/storage/downloads/'"${APPNAME,,}"'-signed.apk"'
+echo
