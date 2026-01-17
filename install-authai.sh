@@ -190,7 +190,10 @@ rm -rf "$WORK"
 mkdir -p "$APPDIR/res/values" "$APPDIR/src/$PKG_PATH" "$OUT" "$KEYDIR"
 
 cat > "$APPDIR/AndroidManifest.xml" <<MAN
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="$PKG">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="$PKG"
+    android:versionCode="1"
+    android:versionName="1.0">
   <application android:label="$APPNAME">
     <activity android:name=".$PUBLIC_CLASS" android:exported="true">
       <intent-filter>
