@@ -1,13 +1,9 @@
+cd ~/Authai
+
+cat > install-authai.sh <<'EOF'
 #!/data/data/com.termux/files/usr/bin/bash
 set -euo pipefail
 IFS=$'\n\t'
-
-echo "======================================"
-echo " Authai - Java -> APK Builder (Termux)"
-echo " by git5 LoxoSec 🐘"
-echo " https://github.com/git5loxosec"
-echo "======================================"
-echo
 
 log(){ echo "[Authai-Install] $*"; }
 die(){ echo "[Authai-Install ERROR] $*" >&2; exit 1; }
@@ -16,46 +12,52 @@ PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 AUTH_BIN="$PREFIX/bin/authai"
 UNINSTALL_BIN="$PREFIX/bin/authai-uninstall"
 
-ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
-export ANDROID_HOME
-
 log "Updating package indexes..."
-pkg update -y >/dev/null
+pkg update -y >/dev/null || true
 
 log "Installing dependencies..."
 pkg install -y \
   openjdk-17 \
   aapt2 \
   android-tools \
+  apksigner \
   zip \
   unzip \
-  curl \
-  ca-certificates \
   termux-tools >/dev/null
 
-have_build_tools(){ ls -1d "$ANDROID_HOME"/build-tools/* >/dev/null 2>&1; }
-have_platforms(){  ls -1d "$ANDROID_HOME"/platforms/android-* >/dev/null 2>&1; }
+# --- verify required tooling exists in PATH ---
+need(){ command -v "$1" >/dev/null 2>&1 || die "Missing '$1' (installation failed)"; }
+need aapt2
+need javac
+need java
+need zip
+need zipalign
+need apksigner
+need keytool
 
-log "Checking Android SDK at: $ANDROID_HOME"
-if ! have_build_tools || ! have_platforms; then
-  cat >&2 <<EOF
-[Authai-Install ERROR] Android SDK is missing/incomplete at:
-  $ANDROID_HOME
+# --- locate Android framework files (no SDK needed) ---
+pick_first() {
+  for p in "$@"; do
+    [[ -e "$p" ]] && { echo "$p"; return 0; }
+  done
+  return 1
+}
 
-Authai requires:
-  - $ANDROID_HOME/build-tools/<version>/
-  - $ANDROID_HOME/platforms/android-*/android.jar
+FRAMEWORK_RES="$(pick_first \
+  /system/framework/framework-res.apk \
+  /system_ext/framework/framework-res.apk \
+  /product/framework/framework-res.apk \
+  /vendor/framework/framework-res.apk \
+  )" || die "Cannot find framework-res.apk on this device."
 
-Fix (pick one):
-  1) Put a working SDK there, OR
-  2) Export ANDROID_HOME to your existing SDK path and rerun this installer.
+FRAMEWORK_JAR="$(pick_first \
+  /system/framework/framework.jar \
+  /system_ext/framework/framework.jar \
+  /product/framework/framework.jar \
+  )" || die "Cannot find framework.jar on this device."
 
-Quick checks:
-  ls -1 $ANDROID_HOME/build-tools
-  ls -1 $ANDROID_HOME/platforms
-EOF
-  exit 1
-fi
+log "Using framework-res: $FRAMEWORK_RES"
+log "Using framework-jar : $FRAMEWORK_JAR"
 
 log "Writing authai to: $AUTH_BIN"
 cat > "$AUTH_BIN" <<'AUTHAI_EOF'
@@ -74,48 +76,45 @@ IFS=$'\n\t'
 die(){ echo "[Authai ERROR] $*" >&2; exit 1; }
 log(){ echo "[Authai] $*"; }
 
-safe_pwd() {
-  if cd "${PWD:-}" 2>/dev/null; then pwd
-  elif cd "$HOME" 2>/dev/null; then pwd
-  else die "Cannot determine a valid working directory."
-  fi
-}
-WORKDIR="$(safe_pwd)"
-
 SRC_NAME="${1:-}"
 APPNAME="${2:-}"
 PKG_ARG="${3:-}"
 
 [[ -n "$SRC_NAME" && -n "$APPNAME" ]] || die "Usage: authai File.java AppName [package.name]"
 [[ "$SRC_NAME" == *.java ]] || die "Source file must end with .java"
+[[ -f "$SRC_NAME" ]] || die "File not found: $SRC_NAME (run authai from the folder containing your .java)"
 
-SRC="$WORKDIR/$SRC_NAME"
-[[ -f "$SRC" ]] || die "File not found: $SRC (run authai from the folder containing your .java)"
+need(){ command -v "$1" >/dev/null 2>&1 || die "Missing '$1'"; }
+need aapt2
+need javac
+need java
+need zip
+need zipalign
+need apksigner
+need keytool
 
-command -v aapt2    >/dev/null || die "Missing aapt2 (pkg install aapt2)"
-command -v javac    >/dev/null || die "Missing javac (pkg install openjdk-17)"
-command -v java     >/dev/null || die "Missing java  (pkg install openjdk-17)"
-command -v zip      >/dev/null || die "Missing zip   (pkg install zip)"
-command -v zipalign >/dev/null || die "Missing zipalign (pkg install android-tools)"
-command -v keytool  >/dev/null || die "Missing keytool (pkg install openjdk-17)"
+# Platform files (no SDK)
+pick_first() {
+  for p in "$@"; do
+    [[ -e "$p" ]] && { echo "$p"; return 0; }
+  done
+  return 1
+}
 
-ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
-[[ -d "$ANDROID_HOME" ]] || die "ANDROID_HOME not found: $ANDROID_HOME"
+FRAMEWORK_RES="$(pick_first \
+  /system/framework/framework-res.apk \
+  /system_ext/framework/framework-res.apk \
+  /product/framework/framework-res.apk \
+  /vendor/framework/framework-res.apk \
+  )" || die "Cannot find framework-res.apk on this device."
 
-BT="$(ls -1d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -n 1 || true)"
-[[ -n "${BT:-}" && -d "$BT" ]] || die "No build-tools found in: $ANDROID_HOME/build-tools"
+FRAMEWORK_JAR="$(pick_first \
+  /system/framework/framework.jar \
+  /system_ext/framework/framework.jar \
+  /product/framework/framework.jar \
+  )" || die "Cannot find framework.jar on this device."
 
-PLATFORM_DIR="$(ls -1d "$ANDROID_HOME"/platforms/android-* 2>/dev/null | sort -V | tail -n 1 || true)"
-[[ -n "${PLATFORM_DIR:-}" && -d "$PLATFORM_DIR" ]] || die "No platforms found in: $ANDROID_HOME/platforms"
-PLAT="$PLATFORM_DIR/android.jar"
-[[ -f "$PLAT" ]] || die "android.jar not found: $PLAT"
-
-APKSIGNER="$BT/apksigner"
-[[ -x "$APKSIGNER" ]] || die "apksigner missing/executable: $APKSIGNER"
-
-D8BIN="$BT/d8"
-D8JAR="$BT/lib/d8.jar"
-[[ -x "$D8BIN" || -f "$D8JAR" ]] || die "d8 not found in build-tools: $BT"
+SRC="$SRC_NAME"
 
 PKG_IN_FILE="$(sed -nE 's/^[[:space:]]*package[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]*;.*/\1/p' "$SRC" | head -n1 || true)"
 PUBLIC_CLASS="$(sed -nE 's/^[[:space:]]*public[[:space:]]+(final[[:space:]]+)?class[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\2/p' "$SRC" | head -n1 || true)"
@@ -161,7 +160,7 @@ aapt2 compile --dir "$APPDIR/res" -o "$OUT/res.zip"
 log "aapt2 link..."
 mkdir -p "$OUT/gen"
 aapt2 link \
-  -I "$PLAT" \
+  -I "$FRAMEWORK_RES" \
   --manifest "$APPDIR/AndroidManifest.xml" \
   --min-sdk-version 24 \
   --target-sdk-version 34 \
@@ -175,20 +174,19 @@ RJAVA="$OUT/gen/$PKG_PATH/R.java"
 [[ -f "$RJAVA" ]] || die "R.java not generated (package mismatch). Expected: $RJAVA"
 
 javac -source 8 -target 8 \
-  -classpath "$PLAT" \
+  -bootclasspath "$FRAMEWORK_JAR" \
   -d "$OUT/classes" \
   "$APPDIR/src/$PKG_PATH/$PUBLIC_CLASS.java" \
   "$RJAVA"
 
 log "d8..."
+# Use d8 if present; otherwise use the dx "d8" shim if available
+D8BIN="$(command -v d8 || true)"
+[[ -n "$D8BIN" ]] || die "d8 not found. Install: pkg install dx (or r8) then retry."
+
 mapfile -t CLASS_FILES < <(find "$OUT/classes" -type f -name "*.class")
 [[ "${#CLASS_FILES[@]}" -gt 0 ]] || die "No .class files produced."
-
-if [[ -x "$D8BIN" ]]; then
-  "$D8BIN" --min-api 24 --lib "$PLAT" --output "$OUT" "${CLASS_FILES[@]}"
-else
-  java -cp "$D8JAR" com.android.tools.r8.D8 --min-api 24 --lib "$PLAT" --output "$OUT" "${CLASS_FILES[@]}"
-fi
+"$D8BIN" --min-api 24 --lib "$FRAMEWORK_JAR" --output "$OUT" "${CLASS_FILES[@]}"
 [[ -f "$OUT/classes.dex" ]] || die "classes.dex was not produced."
 
 log "packaging..."
@@ -198,7 +196,6 @@ zip -q -j "$OUT/unsigned.apk" "$OUT/classes.dex"
 log "zipalign..."
 zipalign -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
-mkdir -p "$KEYDIR"
 if [[ ! -f "$KEYSTORE" ]]; then
   log "creating keystore..."
   keytool -genkeypair -v \
@@ -212,10 +209,10 @@ fi
 
 log "signing..."
 FINAL="$WORK/${APPNAME,,}-signed.apk"
-"$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias "$ALIAS" --out "$FINAL" "$OUT/aligned.apk"
+apksigner sign --ks "$KEYSTORE" --ks-key-alias "$ALIAS" --out "$FINAL" "$OUT/aligned.apk"
 
 log "verifying..."
-"$APKSIGNER" verify "$FINAL" >/dev/null || die "apksigner verify failed"
+apksigner verify "$FINAL" >/dev/null || die "apksigner verify failed"
 
 log "OK -> $FINAL"
 AUTHAI_EOF
@@ -241,10 +238,10 @@ log "Removing builds..."
 rm -rf "$HOME/authai_builds" 2>/dev/null || true
 
 if [[ "$PURGE" == "--purge" ]]; then
-  log "PURGE: removing keystore + sdk..."
-  rm -rf "$HOME/keystores" "$HOME/android-sdk" "$HOME/.authai" 2>/dev/null || true
+  log "PURGE: removing keystore..."
+  rm -rf "$HOME/keystores" "$HOME/.authai" 2>/dev/null || true
 else
-  log "Keeping keystore + sdk."
+  log "Keeping keystore."
   log "To remove everything: authai-uninstall --purge"
 fi
 
@@ -252,8 +249,12 @@ log "Done."
 UN_EOF
 
 chmod +x "$UNINSTALL_BIN"
-
 hash -r || true
+
 log "Installed ✅"
 echo "Run: authai File.java AppName [package.name]"
 echo "Uninstall: authai-uninstall (or authai-uninstall --purge)"
+EOF
+
+chmod +x install-authai.sh
+./install-authai.sh
