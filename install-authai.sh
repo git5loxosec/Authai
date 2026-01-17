@@ -362,7 +362,7 @@ echo "======================================"
 echo " Move APK to Downloads"
 echo "======================================"
 echo
-echo 'cp -f "$FINAL" "$HOME/storage/downloads/'"${APPNAME,,}"'-signed.apk"'
+echo 'cp -f ~/authai_builds/calcapp/calcapp-signed.apk ~/storage/downloads/calcapp-signed.apk'
 echo
 echo
 echo "======================================"
