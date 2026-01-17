@@ -261,10 +261,36 @@ fi
 [[ -f "$OUT/classes.dex" ]] || die "classes.dex was not created."
 
 log "packaging..."
+# Creamos un APK nuevo desde base.apk pero inyectando classes.dex ANTES de firmar,
+# y sin romper el signing block después.
 cp "$OUT/base.apk" "$OUT/unsigned.apk"
-zip -q -j "$OUT/unsigned.apk" "$OUT/classes.dex"
+
+# Inyecta classes.dex (sin -j) desde el mismo directorio para mantener estructura zip correcta
+(
+  cd "$OUT"
+  zip -q unsigned.apk classes.dex
+)
 
 log "zipalign..."
+zipalign -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
+
+log "signing..."
+FINAL="$WORK/${APPNAME,,}-signed.apk"
+
+# Fuerza firmas modernas (Android 15 las requiere en la práctica)
+"$APKSIGNER" sign \
+  --ks "$KEYSTORE" \
+  --ks-key-alias "$ALIAS" \
+  --v1-signing-enabled true \
+  --v2-signing-enabled true \
+  --v3-signing-enabled true \
+  --v4-signing-enabled false \
+  --out "$FINAL" \
+  "$OUT/aligned.apk"
+
+log "verifying signature..."
+"$APKSIGNER" verify --verbose "$FINAL" >/dev/null || die "apksigner verify failed."
+
 zipalign -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
 if [[ ! -f "$KEYSTORE" ]]; then
