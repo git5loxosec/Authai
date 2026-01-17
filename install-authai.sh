@@ -1,82 +1,17 @@
 #!/data/data/com.termux/files/usr/bin/bash
-set -euo pipefail
-IFS=$'\n\t'
-
-# --- banner  ---
-clear
-cat <<'BANNER'
-======================================
- Authai - Java -> APK Builder (Termux)
- by git5 LoxoSec 🐘
- https://github.com/git5loxosec
-======================================
-BANNER
-echo
-
-log(){ echo "[Authai-Install] $*"; }
-die(){ echo "[Authai-Install ERROR] $*" >&2; exit 1; }
-
-PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
-AUTH_BIN="$PREFIX/bin/authai"
-UNINSTALL_BIN="$PREFIX/bin/authai-uninstall"
-
-ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
-export ANDROID_HOME
-
-log "Updating package indexes..."
-pkg update -y
-
-log "Installing dependencies..."
-pkg install -y \
-  openjdk-17 \
-  aapt2 \
-  android-tools \
-  zip \
-  unzip \
-  curl \
-  ca-certificates \
-  termux-tools
-
-have_build_tools(){ ls -1d "$ANDROID_HOME"/build-tools/* >/dev/null 2>&1; }
-have_platforms(){ ls -1d "$ANDROID_HOME"/platforms/android-* >/dev/null 2>&1; }
-
-log "Checking Android SDK at: $ANDROID_HOME"
-if ! have_build_tools || ! have_platforms; then
-  cat >&2 <<EOF
-[Authai-Install ERROR] Android SDK incomplete in: $ANDROID_HOME
-
-Required:
-  - $ANDROID_HOME/build-tools/<version>/
-  - $ANDROID_HOME/platforms/android-*/android.jar
-
-Fix options:
-  1) Copy/move a working SDK into: $ANDROID_HOME
-  2) Export ANDROID_HOME to your SDK path, then rerun installer
-
-Example check:
-  ls -1 $ANDROID_HOME/build-tools
-  ls -1 $ANDROID_HOME/platforms
-EOF
-  exit 1
-fi
-
-# ---------- Install Authai (embedded code) ----------
-log "Writing Authai to: $AUTH_BIN"
-cat > "$AUTH_BIN" <<'AUTHAI_EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-set -euo pipefail
-IFS=$'\n\t'
-
-die(){ echo "[Authai ERROR] $*" >&2; exit 1; }
-log(){ echo "[Authai] $*"; }
-
-# --- Banner (keep as-is) ---
+# --- Banner ---
 echo "======================================"
 echo " Authai - Java -> APK Builder (Termux)"
 echo " by git5 LoxoSec 🐘"
 echo " https://github.com/git5loxosec"
 echo "======================================"
 echo
+
+set -euo pipefail
+IFS=$'\n\t'
+
+die(){ echo "[Authai ERROR] $*" >&2; exit 1; }
+log(){ echo "[Authai] $*"; }
 
 safe_pwd() {
   if cd "${PWD:-}" 2>/dev/null; then pwd
@@ -94,44 +29,36 @@ PKG_ARG="${3:-}"
 [[ "$SRC_NAME" == *.java ]] || die "Source file must end with .java"
 
 SRC="$WORKDIR/$SRC_NAME"
-[[ -f "$SRC" ]] || die "File not found: $SRC (run authai from the folder that contains your .java)"
+[[ -f "$SRC" ]] || die "File not found: $SRC"
 
-command -v aapt2    >/dev/null || die "Missing aapt2. Install: pkg install aapt2"
-command -v javac    >/dev/null || die "Missing javac. Install: pkg install openjdk-17"
-command -v java     >/dev/null || die "Missing java.  Install: pkg install openjdk-17"
-command -v zip      >/dev/null || die "Missing zip.   Install: pkg install zip"
-command -v zipalign >/dev/null || die "Missing zipalign. Install: pkg install android-tools"
-command -v keytool  >/dev/null || die "Missing keytool. Install: pkg install openjdk-17"
+command -v aapt2    >/dev/null || die "Missing aapt2"
+command -v javac    >/dev/null || die "Missing javac"
+command -v java     >/dev/null || die "Missing java"
+command -v zip      >/dev/null || die "Missing zip"
+command -v zipalign >/dev/null || die "Missing zipalign"
+command -v keytool  >/dev/null || die "Missing keytool"
 
 ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
 [[ -d "$ANDROID_HOME" ]] || die "ANDROID_HOME not found: $ANDROID_HOME"
 
 BT="$(ls -1d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -n 1 || true)"
-[[ -n "${BT:-}" && -d "$BT" ]] || die "No build-tools found in: $ANDROID_HOME/build-tools"
+[[ -n "$BT" ]] || die "No build-tools found"
 
 PLATFORM_DIR="$(ls -1d "$ANDROID_HOME"/platforms/android-* 2>/dev/null | sort -V | tail -n 1 || true)"
-[[ -n "${PLATFORM_DIR:-}" && -d "$PLATFORM_DIR" ]] || die "No platforms found in: $ANDROID_HOME/platforms"
 PLAT="$PLATFORM_DIR/android.jar"
-[[ -f "$PLAT" ]] || die "android.jar not found: $PLAT"
+[[ -f "$PLAT" ]] || die "android.jar not found"
 
 APKSIGNER="$BT/apksigner"
-[[ -x "$APKSIGNER" ]] || die "apksigner not found/executable: $APKSIGNER"
+[[ -x "$APKSIGNER" ]] || die "apksigner missing"
 
 D8BIN="$BT/d8"
 D8JAR="$BT/lib/d8.jar"
-[[ -x "$D8BIN" || -f "$D8JAR" ]] || die "d8 not found in build-tools: $BT"
 
-PKG_IN_FILE="$(sed -nE 's/^[[:space:]]*package[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]*;.*/\1/p' "$SRC" | head -n 1 || true)"
-PUBLIC_CLASS="$(sed -nE 's/^[[:space:]]*public[[:space:]]+(final[[:space:]]+)?class[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*.*/\2/p' "$SRC" | head -n 1 || true)"
-[[ -n "$PUBLIC_CLASS" ]] || die "Could not detect a 'public class X' in $SRC_NAME"
+PKG_IN_FILE="$(sed -nE 's/^package[[:space:]]+([a-zA-Z0-9_.]+);/\1/p' "$SRC" | head -n1)"
+PUBLIC_CLASS="$(sed -nE 's/^public[[:space:]]+class[[:space:]]+([A-Za-z0-9_]+).*/\1/p' "$SRC" | head -n1)"
+[[ -n "$PUBLIC_CLASS" ]] || die "No public class found"
 
-if [[ -n "$PKG_ARG" ]]; then
-  PKG="$PKG_ARG"
-elif [[ -n "$PKG_IN_FILE" ]]; then
-  PKG="$PKG_IN_FILE"
-else
-  PKG="com.authai.app"
-fi
+PKG="${PKG_ARG:-${PKG_IN_FILE:-com.authai.app}}"
 PKG_PATH="${PKG//.//}"
 
 WORK="$HOME/authai_builds/${APPNAME,,}"
@@ -163,44 +90,21 @@ cat > "$APPDIR/res/values/strings.xml" <<STR
 </resources>
 STR
 
-SRC_DST="$APPDIR/src/$PKG_PATH/${PUBLIC_CLASS}.java"
-cp -f "$SRC" "$SRC_DST"
+cp "$SRC" "$APPDIR/src/$PKG_PATH/$PUBLIC_CLASS.java"
 
 log "aapt2 compile..."
 aapt2 compile --dir "$APPDIR/res" -o "$OUT/res.zip"
 
 log "aapt2 link..."
 mkdir -p "$OUT/gen"
-aapt2 link \
-  -I "$PLAT" \
-  --manifest "$APPDIR/AndroidManifest.xml" \
-  --min-sdk-version 24 \
-  --target-sdk-version 34 \
-  --java "$OUT/gen" \
-  -o "$OUT/base.apk" \
-  "$OUT/res.zip"
+aapt2 link -I "$PLAT" --manifest "$APPDIR/AndroidManifest.xml" --min-sdk-version 24 --target-sdk-version 34 --java "$OUT/gen" -o "$OUT/base.apk" "$OUT/res.zip"
 
 log "javac..."
 mkdir -p "$OUT/classes"
-RJAVA="$OUT/gen/$PKG_PATH/R.java"
-[[ -f "$RJAVA" ]] || die "R.java not generated (package mismatch). Expected: $RJAVA"
-
-javac -source 8 -target 8 \
-  -classpath "$PLAT" \
-  -d "$OUT/classes" \
-  "$SRC_DST" \
-  "$RJAVA"
+javac -source 8 -target 8 -classpath "$PLAT" -d "$OUT/classes" "$APPDIR/src/$PKG_PATH/$PUBLIC_CLASS.java" "$OUT/gen/$PKG_PATH/R.java"
 
 log "d8..."
-mapfile -t CLASS_FILES < <(find "$OUT/classes" -type f -name "*.class")
-[[ "${#CLASS_FILES[@]}" -gt 0 ]] || die "No .class files produced."
-
-if [[ -x "$D8BIN" ]]; then
-  "$D8BIN" --min-api 24 --lib "$PLAT" --output "$OUT" "${CLASS_FILES[@]}"
-else
-  java -cp "$D8JAR" com.android.tools.r8.D8 --min-api 24 --lib "$PLAT" --output "$OUT" "${CLASS_FILES[@]}"
-fi
-[[ -f "$OUT/classes.dex" ]] || die "classes.dex was not produced."
+"$D8BIN" --min-api 24 --lib "$PLAT" --output "$OUT" $(find "$OUT/classes" -name "*.class")
 
 log "packaging..."
 cp "$OUT/base.apk" "$OUT/unsigned.apk"
@@ -209,72 +113,16 @@ zip -q -j "$OUT/unsigned.apk" "$OUT/classes.dex"
 log "zipalign..."
 zipalign -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
 
-mkdir -p "$KEYDIR"
 if [[ ! -f "$KEYSTORE" ]]; then
-  log "creating keystore: $KEYSTORE"
-  keytool -genkeypair -v \
-    -keystore "$KEYSTORE" \
-    -alias "$ALIAS" \
-    -keyalg RSA -keysize 2048 -validity 10000 \
-    -dname "CN=Authai,O=Authai"
-else
-  log "using existing keystore: $KEYSTORE"
+  log "creating keystore..."
+  keytool -genkeypair -v -keystore "$KEYSTORE" -alias "$ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Authai,O=Authai"
 fi
 
 log "signing..."
 FINAL="$WORK/${APPNAME,,}-signed.apk"
 "$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias "$ALIAS" --out "$FINAL" "$OUT/aligned.apk"
 
-log "verifying signature..."
-"$APKSIGNER" verify --verbose "$FINAL" >/dev/null || die "apksigner verify failed."
-
-log "verifying zipalign..."
-zipalign -c -v 4 "$FINAL" >/dev/null || die "zipalign verify failed."
+log "verifying..."
+"$APKSIGNER" verify "$FINAL" >/dev/null
 
 log "OK -> $FINAL"
-AUTHAI_EOF
-
-chmod +x "$AUTH_BIN"
-
-# ---------- Uninstall script ----------
-log "Writing uninstall to: $UNINSTALL_BIN"
-cat > "$UNINSTALL_BIN" <<'UN_EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-set -euo pipefail
-IFS=$'\n\t'
-log(){ echo "[Authai-Uninstall] $*"; }
-
-PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
-AUTH_BIN="$PREFIX/bin/authai"
-UNINSTALL_BIN="$PREFIX/bin/authai-uninstall"
-PURGE="${1:-}"
-
-log "Removing binaries..."
-rm -f "$AUTH_BIN" "$UNINSTALL_BIN" 2>/dev/null || true
-
-log "Removing builds..."
-rm -rf "$HOME/authai_builds" 2>/dev/null || true
-
-if [[ "$PURGE" == "--purge" ]]; then
-  log "PURGE: removing keystore + sdk..."
-  rm -rf "$HOME/keystores" "$HOME/android-sdk" "$HOME/.authai" 2>/dev/null || true
-else
-  log "Keeping keystore + sdk."
-  log "To remove everything: authai-uninstall --purge"
-fi
-
-log "Done."
-UN_EOF
-
-chmod +x "$UNINSTALL_BIN"
-
-hash -r || true
-
-log "Installed ✅"
-echo "Try:"
-echo "  cd /path/to/your/java"
-echo "  authai YourFile.java MyApp [com.your.package]"
-echo
-echo "Uninstall:"
-echo "  authai-uninstall"
-echo "  authai-uninstall --purge"
