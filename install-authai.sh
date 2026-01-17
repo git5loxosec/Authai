@@ -340,3 +340,20 @@ log "Installed ✅"
 echo "Run: authai File.java AppName [package.name]"
 echo "Uninstall: authai-uninstall   (or: authai-uninstall --purge)"
 echo "Also supported: ./install-authai.sh uninstall [--purge]"
+echo
+echo "======================================"
+echo " APK Verification (optional)"
+echo "======================================"
+echo
+echo "You can verify the generated APK with:"
+echo
+echo 'APK="$HOME/authai_builds/'"${APPNAME,,}"'/'"${APPNAME,,}"'-signed.apk"'
+echo 'BT="$(ls -1d "$HOME/android-sdk/build-tools/"* | sort -V | tail -n 1)"'
+echo
+echo '"$BT/apksigner" verify --verbose --print-certs "$APK"'
+echo 'zipalign -c -v 4 "$APK"'
+echo 'aapt2 dump badging "$APK" | egrep -i '\''package:|versionCode|versionName|sdkVersion|targetSdkVersion|launchable-activity'\'''
+echo 'unzip -t "$APK" | tail -n 5'
+echo
+echo "======================================"
+echo
