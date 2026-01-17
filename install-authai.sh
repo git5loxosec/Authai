@@ -2,7 +2,7 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-# ---- Installer banner (ONLY for installer) ----
+# --- banner ---
 clear
 cat <<'BANNER'
 ======================================
