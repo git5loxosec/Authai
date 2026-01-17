@@ -1,8 +1,8 @@
-======================================
+
  Authai - Java -> APK Builder (Termux)
  by git5 LoxoSec 🐘
  https://github.com/git5loxosec
-======================================
+
 
 Authai is a lightweight Android APK builder for Termux that compiles a single Java file into a fully signed, aligned, and installable APK using only Android SDK tools.
 
