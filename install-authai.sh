@@ -190,12 +190,24 @@ mkdir -p "$APPDIR/res/layout" "$APPDIR/res/values" "$APPDIR/src/$PKG_PATH" "$OUT
 
 cat > "$APPDIR/AndroidManifest.xml" <<MAN
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="$PKG">
-  <application android:label="$APPNAME">
-    <activity android:name=".$PUBLIC_CLASS" android:exported="true">
+
+  <uses-sdk android:minSdkVersion="24" android:targetSdkVersion="34"/>
+
+  <application
+      android:label="$APPNAME"
+      android:allowBackup="false"
+      android:extractNativeLibs="false"
+      android:supportsRtl="true">
+
+    <activity
+        android:name=".$PUBLIC_CLASS"
+        android:exported="true">
+
       <intent-filter>
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
+
     </activity>
   </application>
 </manifest>
