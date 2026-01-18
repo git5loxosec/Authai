@@ -18,7 +18,6 @@ SDKMANAGER="$CMDLINE_TOOLS_DIR/bin/sdkmanager"
 ACTION="${1:-install}"
 PURGE="${2:-}"
 
-# -------------------- Uninstall (single-file support) --------------------
 do_uninstall() {
   log "Removing binaries..."
   rm -f "$AUTH_BIN" "$UNINSTALL_BIN" 2>/dev/null || true
@@ -41,7 +40,7 @@ if [[ "$ACTION" == "uninstall" ]]; then
   exit 0
 fi
 
-# -------------------- Install deps --------------------
+# -------------------- deps --------------------
 log "Updating packages..."
 pkg update -y
 
@@ -54,18 +53,20 @@ pkg install -y \
   unzip \
   curl \
   ca-certificates \
-  termux-tools
+  termux-tools \
+  imagemagick
 
 command -v java >/dev/null 2>&1 || die "Java not found after installing openjdk-17"
+command -v aapt2 >/dev/null 2>&1 || die "aapt2 not found after install"
+command -v zipalign >/dev/null 2>&1 || die "zipalign not found after install"
+command -v unzip >/dev/null 2>&1 || die "unzip not found after install"
 
 # -------------------- SDK bootstrap --------------------
 have_build_tools(){ ls -1d "$ANDROID_HOME"/build-tools/* >/dev/null 2>&1; }
 have_platform_jar(){ ls -1 "$ANDROID_HOME"/platforms/android-*/android.jar >/dev/null 2>&1; }
 
 ensure_sdkmanager() {
-  if [[ -x "$SDKMANAGER" ]]; then
-    return 0
-  fi
+  if [[ -x "$SDKMANAGER" ]]; then return 0; fi
 
   log "Bootstrapping sdkmanager..."
   mkdir -p "$ANDROID_HOME/cmdline-tools" "$ANDROID_HOME/tmp"
@@ -82,7 +83,6 @@ ensure_sdkmanager() {
   mkdir -p "$ANDROID_HOME/tmp/unzip"
   unzip -q "$zip" -d "$ANDROID_HOME/tmp/unzip" || die "Failed to unzip commandline-tools"
 
-  # Google zip contains: cmdline-tools/
   rm -rf "$CMDLINE_TOOLS_DIR"
   mkdir -p "$ANDROID_HOME/cmdline-tools"
   mv "$ANDROID_HOME/tmp/unzip/cmdline-tools" "$CMDLINE_TOOLS_DIR" \
@@ -118,11 +118,11 @@ ensure_minimal_sdk() {
 
 ensure_minimal_sdk
 
-# -------------------- Write authai --------------------
+# -------------------- write authai --------------------
 log "Writing authai to: $AUTH_BIN"
 cat > "$AUTH_BIN" <<'AUTHAI_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
-# --- Banner (ONLY ONE banner, by design) ---
+# --- Banner (ONLY ONE banner) ---
 echo "======================================"
 echo " Authai - Java -> APK Builder (Termux)"
 echo " by git5 LoxoSec 🐘"
@@ -146,11 +146,10 @@ WORKDIR="$(safe_pwd)"
 
 SRC_NAME="${1:-}"
 APPNAME="${2:-}"
-shift $(( $#>=2 ? 2 : $# )) || true
+PKG_ARG="${3:-}"
+ICON_ARG="${4:-}"
 
-if [[ -z "${SRC_NAME:-}" || -z "${APPNAME:-}" ]]; then
-  die "Usage: authai File.java AppName [package.name] [--icon /path/icon.png] OR [icon.png]"
-fi
+[[ -n "$SRC_NAME" && -n "$APPNAME" ]] || die "Usage: authai File.java AppName [package.name] [icon.png]"
 [[ "$SRC_NAME" == *.java ]] || die "Source file must end with .java"
 
 SRC="$WORKDIR/$SRC_NAME"
@@ -163,6 +162,14 @@ command -v zip      >/dev/null || die "Missing zip   (pkg install zip)"
 command -v unzip    >/dev/null || die "Missing unzip (pkg install unzip)"
 command -v zipalign >/dev/null || die "Missing zipalign (pkg install android-tools)"
 command -v keytool  >/dev/null || die "Missing keytool (pkg install openjdk-17)"
+
+# ImageMagick (optional but recommended for icon)
+IM_TOOL=""
+if command -v magick >/dev/null 2>&1; then
+  IM_TOOL="magick"
+elif command -v convert >/dev/null 2>&1; then
+  IM_TOOL="convert"
+fi
 
 ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
 [[ -d "$ANDROID_HOME" ]] || die "ANDROID_HOME not found: $ANDROID_HOME"
@@ -182,51 +189,6 @@ D8BIN="$BT/d8"
 D8JAR="$BT/lib/d8.jar"
 [[ -x "$D8BIN" || -f "$D8JAR" ]] || die "d8 not found in build-tools: $BT"
 
-# -------- Parse optional args: [package.name] [--icon path] OR [icon.png] --------
-PKG_ARG=""
-ICON_PATH=""
-
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --icon)
-      shift || true
-      [[ $# -gt 0 ]] || die "--icon requires a file path"
-      ICON_PATH="$1"
-      shift || true
-      ;;
-    *)
-      # If looks like a package and we don't have PKG_ARG yet:
-      if [[ -z "$PKG_ARG" && "$1" == *.* && "$1" != /* && "$1" != ./* && "$1" != ~* ]]; then
-        PKG_ARG="$1"
-        shift || true
-      else
-        # Otherwise treat as icon (4th arg shortcut)
-        if [[ -z "$ICON_PATH" ]]; then
-          ICON_PATH="$1"
-          shift || true
-        else
-          die "Unknown extra argument: $1"
-        fi
-      fi
-      ;;
-  esac
-done
-
-# Normalize icon path if provided
-if [[ -n "$ICON_PATH" ]]; then
-  # Expand ~
-  ICON_PATH="${ICON_PATH/#\~/$HOME}"
-  # If relative, make it relative to WORKDIR
-  if [[ "$ICON_PATH" != /* ]]; then
-    ICON_PATH="$WORKDIR/$ICON_PATH"
-  fi
-  [[ -f "$ICON_PATH" ]] || die "Icon file not found: $ICON_PATH"
-  case "${ICON_PATH,,}" in
-    *.png) : ;;
-    *) die "Icon must be a .png (got: $ICON_PATH)" ;;
-  esac
-fi
-
 # package + public class detection (robust to indentation)
 PKG_IN_FILE="$(sed -nE 's/^[[:space:]]*package[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]*;.*/\1/p' "$SRC" | head -n1 || true)"
 PUBLIC_CLASS="$(sed -nE 's/^[[:space:]]*public[[:space:]]+(final[[:space:]]+)?class[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\2/p' "$SRC" | head -n1 || true)"
@@ -245,15 +207,70 @@ ALIAS="authaiupload"
 rm -rf "$WORK"
 mkdir -p "$APPDIR/res/values" "$APPDIR/src/$PKG_PATH" "$OUT" "$KEYDIR"
 
-# If icon provided, copy to drawable + enable android:icon
+# -------------------- icon auto-detect + resize + mipmaps --------------------
+find_icon() {
+  # 1) If user passed a path, use it (relative to WORKDIR allowed)
+  if [[ -n "${ICON_ARG:-}" ]]; then
+    if [[ -f "$WORKDIR/$ICON_ARG" ]]; then echo "$WORKDIR/$ICON_ARG"; return 0; fi
+    if [[ -f "$ICON_ARG" ]]; then echo "$ICON_ARG"; return 0; fi
+    die "Icon not found: $ICON_ARG"
+  fi
+
+  # 2) Look for icon.png in current folder
+  if [[ -f "$WORKDIR/icon.png" ]]; then echo "$WORKDIR/icon.png"; return 0; fi
+
+  # 3) Fallback: ~/icon.png
+  if [[ -f "$HOME/icon.png" ]]; then echo "$HOME/icon.png"; return 0; fi
+
+  return 1
+}
+
+HAVE_ICON="false"
 ICON_ATTR=""
-if [[ -n "$ICON_PATH" ]]; then
-  mkdir -p "$APPDIR/res/drawable"
-  cp -f "$ICON_PATH" "$APPDIR/res/drawable/ic_launcher.png"
-  ICON_ATTR='android:icon="@drawable/ic_launcher"'
+
+if [[ -n "${IM_TOOL:-}" ]]; then
+  ICON_PATH="$(find_icon 2>/dev/null || true)"
+  if [[ -n "${ICON_PATH:-}" ]]; then
+    log "icon: using $ICON_PATH"
+
+    mkdir -p \
+      "$APPDIR/res/mipmap-mdpi" \
+      "$APPDIR/res/mipmap-hdpi" \
+      "$APPDIR/res/mipmap-xhdpi" \
+      "$APPDIR/res/mipmap-xxhdpi" \
+      "$APPDIR/res/mipmap-xxxhdpi"
+
+    ICON_512="$OUT/icon-512.png"
+
+    if [[ "$IM_TOOL" == "magick" ]]; then
+      magick "$ICON_PATH" -auto-orient -resize 512x512^ -gravity center -extent 512x512 "$ICON_512"
+    else
+      convert "$ICON_PATH" -auto-orient -resize 512x512^ -gravity center -extent 512x512 "$ICON_512"
+    fi
+
+    gen_icon() {
+      local size="$1"
+      local out="$2"
+      if [[ "$IM_TOOL" == "magick" ]]; then
+        magick "$ICON_512" -resize "${size}x${size}" "$out"
+      else
+        convert "$ICON_512" -resize "${size}x${size}" "$out"
+      fi
+    }
+
+    gen_icon 48  "$APPDIR/res/mipmap-mdpi/ic_launcher.png"
+    gen_icon 72  "$APPDIR/res/mipmap-hdpi/ic_launcher.png"
+    gen_icon 96  "$APPDIR/res/mipmap-xhdpi/ic_launcher.png"
+    gen_icon 144 "$APPDIR/res/mipmap-xxhdpi/ic_launcher.png"
+    gen_icon 192 "$APPDIR/res/mipmap-xxxhdpi/ic_launcher.png"
+
+    HAVE_ICON="true"
+    ICON_ATTR='android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"'
+  fi
 fi
 
-# Manifest: include versionCode/versionName + uses-sdk to avoid empty version fields
+# -------------------- Manifest --------------------
+# (includes versionCode/versionName + uses-sdk; icon only if available)
 cat > "$APPDIR/AndroidManifest.xml" <<MAN
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="$PKG"
@@ -266,8 +283,8 @@ cat > "$APPDIR/AndroidManifest.xml" <<MAN
 
     <application
         android:label="$APPNAME"
-        $ICON_ATTR
-        android:allowBackup="false">
+        android:allowBackup="false"
+        $ICON_ATTR>
 
         <activity
             android:name=".$PUBLIC_CLASS"
@@ -356,13 +373,25 @@ log "verifying..."
 zipalign -c -v 4 "$FINAL" >/dev/null || die "zipalign verify failed"
 
 log "OK -> $FINAL"
-if [[ -n "$ICON_PATH" ]]; then
-  log "Icon: $ICON_PATH"
-fi
+
+echo
+echo "Next:"
+echo "  Copy to Downloads:"
+echo "    cp -f \"$FINAL\" \"$HOME/storage/downloads/\""
+echo
+echo "  Install (GUI):"
+echo "    termux-open \"$HOME/storage/downloads/$(basename "$FINAL")\""
+echo
+echo "  Verify (optional):"
+echo "    BT=\"\$(ls -1d \\\"$HOME/android-sdk/build-tools/\\\"* | sort -V | tail -n 1)\""
+echo "    \"\$BT/apksigner\" verify --verbose --print-certs \"$FINAL\""
+echo "    zipalign -c -v 4 \"$FINAL\""
+echo "    aapt2 dump badging \"$FINAL\" | egrep -i 'package:|versionCode|versionName|sdkVersion|targetSdkVersion|launchable-activity'"
+echo "    unzip -t \"$FINAL\" | tail -n 5"
 AUTHAI_EOF
 chmod +x "$AUTH_BIN"
 
-# -------------------- Write authai-uninstall --------------------
+# -------------------- write authai-uninstall --------------------
 log "Writing uninstall to: $UNINSTALL_BIN"
 cat > "$UNINSTALL_BIN" <<'UN_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
@@ -395,24 +424,17 @@ UN_EOF
 chmod +x "$UNINSTALL_BIN"
 
 hash -r || true
-
 log "Installed ✅"
+echo "Run:"
+echo "  authai File.java AppName [package.name] [icon.png]"
 echo
-echo "Usage:"
-echo "  authai File.java AppName [package.name] [--icon /path/icon.png]"
-echo "  authai File.java AppName [package.name] /path/icon.png"
-echo
-echo "Example:"
-echo "  authai CalculatorPentest.java calcapp --icon ./icon.png"
-echo
-echo "Post-build (copy to Downloads):"
-echo '  APP="calcapp"'
-echo '  APK="$HOME/authai_builds/$APP/${APP}-signed.apk"'
-echo '  termux-setup-storage'
-echo '  cp -f "$APK" "$HOME/storage/downloads/${APP}-signed.apk"'
-echo '  termux-open "$HOME/storage/downloads/${APP}-signed.apk"'
+echo "Icon behavior:"
+echo "  - If you pass icon.png as 4th arg, it will be used."
+echo "  - Else, Authai will try: ./icon.png then ~/icon.png"
+echo "  - Any PNG size/name works; it is auto-converted and set as launcher icon."
 echo
 echo "Uninstall:"
 echo "  authai-uninstall"
 echo "  authai-uninstall --purge"
 echo "  ./install-authai.sh uninstall [--purge]"
+```0
