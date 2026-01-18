@@ -49,8 +49,11 @@ No Gradle, no Android Studio, no IDE required
 📦 Installation
 
 git clone https://github.com/git5loxosec/Authai.git
+
 cd Authai
+
 chmod +x install-authai.sh
+
 ./install-authai.sh
 
 After installation:
