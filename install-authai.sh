@@ -122,7 +122,7 @@ ensure_minimal_sdk
 log "Writing authai to: $AUTH_BIN"
 cat > "$AUTH_BIN" <<'AUTHAI_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
-# --- Banner (ONLY ONE banner) ---
+# --- Banner ---
 echo "======================================"
 echo " Authai - Java -> APK Builder (Termux)"
 echo " by git5 LoxoSec 🐘"
