@@ -146,9 +146,11 @@ WORKDIR="$(safe_pwd)"
 
 SRC_NAME="${1:-}"
 APPNAME="${2:-}"
-PKG_ARG="${3:-}"
+shift $(( $#>=2 ? 2 : $# )) || true
 
-[[ -n "$SRC_NAME" && -n "$APPNAME" ]] || die "Usage: authai File.java AppName [package.name]"
+if [[ -z "${SRC_NAME:-}" || -z "${APPNAME:-}" ]]; then
+  die "Usage: authai File.java AppName [package.name] [--icon /path/icon.png] OR [icon.png]"
+fi
 [[ "$SRC_NAME" == *.java ]] || die "Source file must end with .java"
 
 SRC="$WORKDIR/$SRC_NAME"
@@ -180,6 +182,51 @@ D8BIN="$BT/d8"
 D8JAR="$BT/lib/d8.jar"
 [[ -x "$D8BIN" || -f "$D8JAR" ]] || die "d8 not found in build-tools: $BT"
 
+# -------- Parse optional args: [package.name] [--icon path] OR [icon.png] --------
+PKG_ARG=""
+ICON_PATH=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --icon)
+      shift || true
+      [[ $# -gt 0 ]] || die "--icon requires a file path"
+      ICON_PATH="$1"
+      shift || true
+      ;;
+    *)
+      # If looks like a package and we don't have PKG_ARG yet:
+      if [[ -z "$PKG_ARG" && "$1" == *.* && "$1" != /* && "$1" != ./* && "$1" != ~* ]]; then
+        PKG_ARG="$1"
+        shift || true
+      else
+        # Otherwise treat as icon (4th arg shortcut)
+        if [[ -z "$ICON_PATH" ]]; then
+          ICON_PATH="$1"
+          shift || true
+        else
+          die "Unknown extra argument: $1"
+        fi
+      fi
+      ;;
+  esac
+done
+
+# Normalize icon path if provided
+if [[ -n "$ICON_PATH" ]]; then
+  # Expand ~
+  ICON_PATH="${ICON_PATH/#\~/$HOME}"
+  # If relative, make it relative to WORKDIR
+  if [[ "$ICON_PATH" != /* ]]; then
+    ICON_PATH="$WORKDIR/$ICON_PATH"
+  fi
+  [[ -f "$ICON_PATH" ]] || die "Icon file not found: $ICON_PATH"
+  case "${ICON_PATH,,}" in
+    *.png) : ;;
+    *) die "Icon must be a .png (got: $ICON_PATH)" ;;
+  esac
+fi
+
 # package + public class detection (robust to indentation)
 PKG_IN_FILE="$(sed -nE 's/^[[:space:]]*package[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]*;.*/\1/p' "$SRC" | head -n1 || true)"
 PUBLIC_CLASS="$(sed -nE 's/^[[:space:]]*public[[:space:]]+(final[[:space:]]+)?class[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\2/p' "$SRC" | head -n1 || true)"
@@ -198,6 +245,14 @@ ALIAS="authaiupload"
 rm -rf "$WORK"
 mkdir -p "$APPDIR/res/values" "$APPDIR/src/$PKG_PATH" "$OUT" "$KEYDIR"
 
+# If icon provided, copy to drawable + enable android:icon
+ICON_ATTR=""
+if [[ -n "$ICON_PATH" ]]; then
+  mkdir -p "$APPDIR/res/drawable"
+  cp -f "$ICON_PATH" "$APPDIR/res/drawable/ic_launcher.png"
+  ICON_ATTR='android:icon="@drawable/ic_launcher"'
+fi
+
 # Manifest: include versionCode/versionName + uses-sdk to avoid empty version fields
 cat > "$APPDIR/AndroidManifest.xml" <<MAN
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -211,6 +266,7 @@ cat > "$APPDIR/AndroidManifest.xml" <<MAN
 
     <application
         android:label="$APPNAME"
+        $ICON_ATTR
         android:allowBackup="false">
 
         <activity
@@ -300,6 +356,9 @@ log "verifying..."
 zipalign -c -v 4 "$FINAL" >/dev/null || die "zipalign verify failed"
 
 log "OK -> $FINAL"
+if [[ -n "$ICON_PATH" ]]; then
+  log "Icon: $ICON_PATH"
+fi
 AUTHAI_EOF
 chmod +x "$AUTH_BIN"
 
@@ -336,45 +395,24 @@ UN_EOF
 chmod +x "$UNINSTALL_BIN"
 
 hash -r || true
+
 log "Installed ✅"
-echo "Run: authai File.java AppName [package.name]"
-echo "Uninstall: authai-uninstall   (or: authai-uninstall --purge)"
-echo "Also supported: ./install-authai.sh uninstall [--purge]"
 echo
-echo "======================================"
-echo " APK Verification (optional)"
-echo "======================================"
+echo "Usage:"
+echo "  authai File.java AppName [package.name] [--icon /path/icon.png]"
+echo "  authai File.java AppName [package.name] /path/icon.png"
 echo
-echo "You can verify the generated APK with:"
+echo "Example:"
+echo "  authai CalculatorPentest.java calcapp --icon ./icon.png"
 echo
-echo 'APK="$HOME/authai_builds/'"${APPNAME,,}"'/'"${APPNAME,,}"'-signed.apk"'
-echo 'BT="$(ls -1d "$HOME/android-sdk/build-tools/"* | sort -V | tail -n 1)"'
+echo "Post-build (copy to Downloads):"
+echo '  APP="calcapp"'
+echo '  APK="$HOME/authai_builds/$APP/${APP}-signed.apk"'
+echo '  termux-setup-storage'
+echo '  cp -f "$APK" "$HOME/storage/downloads/${APP}-signed.apk"'
+echo '  termux-open "$HOME/storage/downloads/${APP}-signed.apk"'
 echo
-echo '"$BT/apksigner" verify --verbose --print-certs "$APK"'
-echo 'zipalign -c -v 4 "$APK"'
-echo 'aapt2 dump badging "$APK" | egrep -i '\''package:|versionCode|versionName|sdkVersion|targetSdkVersion|launchable-activity'\'''
-echo 'unzip -t "$APK" | tail -n 5'
-echo
-echo "======================================"
-echo
-echo
-echo "======================================"
-echo " Move APK to Downloads"
-echo "======================================"
-echo
-echo 'cp -f ~/authai_builds/calcapp/calcapp-signed.apk ~/storage/downloads/calcapp-signed.apk'
-echo
-echo
-echo "======================================"
-echo " Install APK (GUI)"
-echo "======================================"
-echo
-echo 'termux-open "$HOME/storage/downloads/'"${APPNAME,,}"'-signed.apk"'
-echo
-echo
-echo "======================================"
-echo " Install APK (ADB)"
-echo "======================================"
-echo
-echo 'adb install -r "$HOME/storage/downloads/'"${APPNAME,,}"'-signed.apk"'
-echo
+echo "Uninstall:"
+echo "  authai-uninstall"
+echo "  authai-uninstall --purge"
+echo "  ./install-authai.sh uninstall [--purge]"
