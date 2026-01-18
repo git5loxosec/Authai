@@ -437,4 +437,3 @@ echo "Uninstall:"
 echo "  authai-uninstall"
 echo "  authai-uninstall --purge"
 echo "  ./install-authai.sh uninstall [--purge]"
-```0
