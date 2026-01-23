@@ -2,438 +2,332 @@
 set -euo pipefail
 IFS=$'\n\t'
 
-log(){ echo "[Authai-Install] $*"; }
-die(){ echo "[Authai-Install ERROR] $*" >&2; exit 1; }
+banner() {
+  echo "======================================"
+  echo " Authai Installer "
+  echo " by git5 LoxoSec 🐘"
+  echo "======================================"
+  echo
+}
 
-PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
-AUTH_BIN="$PREFIX/bin/authai"
-UNINSTALL_BIN="$PREFIX/bin/authai-uninstall"
+die(){ echo "[Installer ERROR] $*" >&2; exit 1; }
+log(){ echo "[Installer] $*"; }
 
-ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
-export ANDROID_HOME
+usage(){
+  cat <<'EOF'
+Usage:
+  ./install-authai.sh install
+  ./install-authai.sh uninstall
+  ./install-authai.sh doctor
 
-CMDLINE_TOOLS_DIR="$ANDROID_HOME/cmdline-tools/latest"
-SDKMANAGER="$CMDLINE_TOOLS_DIR/bin/sdkmanager"
+What this does:
+  - install: writes the authai CLI into $PREFIX/bin/authai
+  - uninstall: removes $PREFIX/bin/authai
+  - doctor: checks common deps (java, android sdk path, imagemagick optional)
+EOF
+}
 
-ACTION="${1:-install}"
-PURGE="${2:-}"
+cmd="${1:-}"
+[[ -n "$cmd" ]] || { usage; exit 1; }
 
-do_uninstall() {
-  log "Removing binaries..."
-  rm -f "$AUTH_BIN" "$UNINSTALL_BIN" 2>/dev/null || true
+banner
 
-  log "Removing builds..."
-  rm -rf "$HOME/authai_builds" 2>/dev/null || true
+AUTH_DST="$PREFIX/bin/authai"
 
-  if [[ "${PURGE:-}" == "--purge" ]]; then
-    log "PURGE: removing keystore + android-sdk..."
-    rm -rf "$HOME/keystores" "$HOME/.authai" "$HOME/android-sdk" 2>/dev/null || true
+doctor(){
+  log "Checking deps..."
+  command -v bash >/dev/null || die "bash missing"
+  command -v python >/dev/null 2>&1 || log "python missing (optional)"
+  command -v java >/dev/null || die "java missing (pkg install openjdk-17 and/or openjdk-21)"
+  command -v aapt2 >/dev/null 2>&1 || log "aapt2 missing (recommended: pkg install aapt2)"
+  command -v magick >/dev/null 2>&1 || command -v convert >/dev/null 2>&1 || \
+    log "ImageMagick missing (needed for --icon): pkg install imagemagick"
+
+  if [[ -n "${ANDROID_HOME:-}" ]] && [[ -d "$ANDROID_HOME" ]]; then
+    log "ANDROID_HOME=$ANDROID_HOME"
+  elif [[ -n "${ANDROID_SDK_ROOT:-}" ]] && [[ -d "$ANDROID_SDK_ROOT" ]]; then
+    log "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+  elif [[ -d "$HOME/android-sdk" ]]; then
+    log "Found SDK at $HOME/android-sdk"
   else
-    log "Keeping keystore + android-sdk (use: ./install-authai.sh uninstall --purge)"
+    log "SDK not found (expected ANDROID_HOME/ANDROID_SDK_ROOT or ~/android-sdk)"
   fi
 
-  log "Done ✅"
+  log "Doctor done."
 }
 
-if [[ "$ACTION" == "uninstall" ]]; then
-  do_uninstall
-  exit 0
-fi
+install(){
+  mkdir -p "$(dirname "$AUTH_DST")"
 
-# -------------------- deps --------------------
-log "Updating packages..."
-pkg update -y
-
-log "Installing dependencies..."
-pkg install -y \
-  openjdk-17 \
-  aapt2 \
-  android-tools \
-  zip \
-  unzip \
-  curl \
-  ca-certificates \
-  termux-tools \
-  imagemagick
-
-command -v java >/dev/null 2>&1 || die "Java not found after installing openjdk-17"
-command -v aapt2 >/dev/null 2>&1 || die "aapt2 not found after install"
-command -v zipalign >/dev/null 2>&1 || die "zipalign not found after install"
-command -v unzip >/dev/null 2>&1 || die "unzip not found after install"
-
-# -------------------- SDK bootstrap --------------------
-have_build_tools(){ ls -1d "$ANDROID_HOME"/build-tools/* >/dev/null 2>&1; }
-have_platform_jar(){ ls -1 "$ANDROID_HOME"/platforms/android-*/android.jar >/dev/null 2>&1; }
-
-ensure_sdkmanager() {
-  if [[ -x "$SDKMANAGER" ]]; then return 0; fi
-
-  log "Bootstrapping sdkmanager..."
-  mkdir -p "$ANDROID_HOME/cmdline-tools" "$ANDROID_HOME/tmp"
-
-  local zip="$ANDROID_HOME/tmp/cmdline-tools.zip"
-  local url="https://dl.google.com/android/repository/commandlinetools-linux-13114758_latest.zip"
-
-  log "Downloading commandline-tools..."
-  curl -L --fail --retry 3 --retry-delay 1 -o "$zip" "$url" \
-    || die "Failed to download commandline-tools"
-
-  log "Unzipping commandline-tools..."
-  rm -rf "$ANDROID_HOME/tmp/unzip"
-  mkdir -p "$ANDROID_HOME/tmp/unzip"
-  unzip -q "$zip" -d "$ANDROID_HOME/tmp/unzip" || die "Failed to unzip commandline-tools"
-
-  rm -rf "$CMDLINE_TOOLS_DIR"
-  mkdir -p "$ANDROID_HOME/cmdline-tools"
-  mv "$ANDROID_HOME/tmp/unzip/cmdline-tools" "$CMDLINE_TOOLS_DIR" \
-    || die "Unexpected commandline-tools zip structure"
-
-  rm -rf "$ANDROID_HOME/tmp"
-  [[ -x "$SDKMANAGER" ]] || die "sdkmanager not found after bootstrap"
-}
-
-ensure_minimal_sdk() {
-  log "Checking Android SDK at: $ANDROID_HOME"
-  mkdir -p "$ANDROID_HOME"
-
-  ensure_sdkmanager
-
-  mkdir -p "$HOME/.android"
-  touch "$HOME/.android/repositories.cfg" 2>/dev/null || true
-
-  log "Accepting licenses..."
-  yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses >/dev/null 2>&1 || true
-
-  log "Installing minimal SDK packages..."
-  "$SDKMANAGER" --sdk_root="$ANDROID_HOME" \
-    "platform-tools" \
-    "build-tools;34.0.0" \
-    "platforms;android-34" >/dev/null
-
-  have_build_tools || die "SDK install incomplete: missing build-tools/* in $ANDROID_HOME"
-  have_platform_jar || die "SDK install incomplete: missing platforms/android-*/android.jar in $ANDROID_HOME"
-
-  log "SDK installed."
-}
-
-ensure_minimal_sdk
-
-# -------------------- write authai --------------------
-log "Writing authai to: $AUTH_BIN"
-cat > "$AUTH_BIN" <<'AUTHAI_EOF'
+  cat > "$AUTH_DST" <<'AUTHAI_EOF'
 #!/data/data/com.termux/files/usr/bin/bash
-# --- Banner ---
-echo "======================================"
-echo " Authai - Java -> APK Builder (Termux)"
-echo " by git5 LoxoSec 🐘"
-echo " https://github.com/git5loxosec"
-echo "======================================"
-echo
-
 set -euo pipefail
 IFS=$'\n\t'
 
-die(){ echo "[Authai ERROR] $*" >&2; exit 1; }
-log(){ echo "[Authai] $*"; }
+banner() {
+  echo "======================================"
+  echo " Authai — Android APK Builder (Termux)"
+  echo " Works on Android 15, no root!"
+  echo " by git5 LoxoSec 🐘"
+  echo "======================================"
+  echo
+}
 
-safe_pwd() {
-  if cd "${PWD:-}" 2>/dev/null; then pwd
-  elif cd "$HOME" 2>/dev/null; then pwd
-  else die "Cannot determine a valid working directory."
+log(){ echo "[Authai] $*"; }
+die(){ echo "[Authai ERROR] $*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  authai <project_dir> --name <AppName> --pkg <com.example.app> [--icon /path/icon.png]
+
+Notes:
+  - Gradle wrapper REQUIRED (project must include ./gradlew)
+  - Stages to: ~/.authai_work/<safe_name> (never touches original project)
+  - Logs to: ~/authai_trace.txt
+EOF
+}
+
+safe_cd_home() { cd "$HOME" 2>/dev/null || true; }
+
+abs_path() {
+  local p="${1:-}"
+  [[ -n "$p" ]] || { echo ""; return 0; }
+  if command -v python >/dev/null 2>&1; then
+    python -c 'import os,sys; print(os.path.abspath(sys.argv[1]))' "$p"
+  else
+    case "$p" in
+      /*) echo "$p" ;;
+      *)  echo "$PWD/$p" ;;
+    esac
   fi
 }
-WORKDIR="$(safe_pwd)"
 
-SRC_NAME="${1:-}"
-APPNAME="${2:-}"
-PKG_ARG="${3:-}"
-ICON_ARG="${4:-}"
+# args
+[[ $# -ge 1 ]] || { usage; exit 1; }
 
-[[ -n "$SRC_NAME" && -n "$APPNAME" ]] || die "Usage: authai File.java AppName [package.name] [icon.png]"
-[[ "$SRC_NAME" == *.java ]] || die "Source file must end with .java"
+INPUT="$1"; shift
+NAME=""
+PKG=""
+ICON=""
 
-SRC="$WORKDIR/$SRC_NAME"
-[[ -f "$SRC" ]] || die "File not found: $SRC (run authai from the folder containing your .java)"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name) NAME="${2:-}"; shift 2 ;;
+    --pkg)  PKG="${2:-}"; shift 2 ;;
+    --icon) ICON="${2:-}"; shift 2 ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "Unknown arg: $1" ;;
+  esac
+done
 
-command -v aapt2    >/dev/null || die "Missing aapt2 (pkg install aapt2)"
-command -v javac    >/dev/null || die "Missing javac (pkg install openjdk-17)"
-command -v java     >/dev/null || die "Missing java  (pkg install openjdk-17)"
-command -v zip      >/dev/null || die "Missing zip   (pkg install zip)"
-command -v unzip    >/dev/null || die "Missing unzip (pkg install unzip)"
-command -v zipalign >/dev/null || die "Missing zipalign (pkg install android-tools)"
-command -v keytool  >/dev/null || die "Missing keytool (pkg install openjdk-17)"
+[[ -n "$INPUT" ]] || die "Missing project_dir"
+[[ -n "$NAME"  ]] || die "Missing --name <AppName>"
+[[ -n "$PKG"   ]] || die "Missing --pkg <com.example.app>"
 
-# ImageMagick (optional but recommended for icon)
-IM_TOOL=""
-if command -v magick >/dev/null 2>&1; then
-  IM_TOOL="magick"
-elif command -v convert >/dev/null 2>&1; then
-  IM_TOOL="convert"
-fi
+banner
+safe_cd_home
 
-ANDROID_HOME="${ANDROID_HOME:-$HOME/android-sdk}"
-[[ -d "$ANDROID_HOME" ]] || die "ANDROID_HOME not found: $ANDROID_HOME"
+INPUT_ABS="$(abs_path "$INPUT")"
+[[ -d "$INPUT_ABS" ]] || die "Project dir not found: $INPUT_ABS"
+[[ -f "$INPUT_ABS/gradlew" ]] || die "Not a Gradle wrapper project: missing $INPUT_ABS/gradlew"
 
-BT="$(ls -1d "$ANDROID_HOME"/build-tools/* 2>/dev/null | sort -V | tail -n 1 || true)"
-[[ -n "${BT:-}" && -d "$BT" ]] || die "No build-tools found in: $ANDROID_HOME/build-tools"
+log "Args OK. Input: $INPUT_ABS"
 
-PLATFORM_DIR="$(ls -1d "$ANDROID_HOME"/platforms/android-* 2>/dev/null | sort -V | tail -n 1 || true)"
-[[ -n "${PLATFORM_DIR:-}" && -d "$PLATFORM_DIR" ]] || die "No platforms found in: $ANDROID_HOME/platforms"
-PLAT="$PLATFORM_DIR/android.jar"
-[[ -f "$PLAT" ]] || die "android.jar not found: $PLAT"
+# staging
+WORKROOT="$HOME/.authai_work"
+SAFE_ID="$(echo "$NAME" | tr -cd '[:alnum:]' | tr '[:upper:]' '[:lower:]')"
+[[ -n "$SAFE_ID" ]] || SAFE_ID="app"
 
-APKSIGNER="$BT/apksigner"
-[[ -x "$APKSIGNER" ]] || die "apksigner missing/executable: $APKSIGNER"
+STAGE="$WORKROOT/$SAFE_ID"
+rm -rf "$STAGE" 2>/dev/null || true
+mkdir -p "$STAGE"
 
-D8BIN="$BT/d8"
-D8JAR="$BT/lib/d8.jar"
-[[ -x "$D8BIN" || -f "$D8JAR" ]] || die "d8 not found in build-tools: $BT"
+log "Gradle mode -> staging project to: $STAGE"
+cp -a "$INPUT_ABS/." "$STAGE/"
 
-# package + public class detection (robust to indentation)
-PKG_IN_FILE="$(sed -nE 's/^[[:space:]]*package[[:space:]]+([a-zA-Z0-9_.]+)[[:space:]]*;.*/\1/p' "$SRC" | head -n1 || true)"
-PUBLIC_CLASS="$(sed -nE 's/^[[:space:]]*public[[:space:]]+(final[[:space:]]+)?class[[:space:]]+([A-Za-z_][A-Za-z0-9_]*).*/\2/p' "$SRC" | head -n1 || true)"
-[[ -n "$PUBLIC_CLASS" ]] || die "No public class found (expected: public class X) in $SRC_NAME"
+cd "$STAGE" || die "Failed cd to stage: $STAGE"
+chmod +x ./gradlew 2>/dev/null || true
 
-PKG="${PKG_ARG:-${PKG_IN_FILE:-com.authai.app}}"
-PKG_PATH="${PKG//.//}"
+# choose JAVA_HOME by Gradle wrapper version
+GW_PROP="$STAGE/gradle/wrapper/gradle-wrapper.properties"
+[[ -f "$GW_PROP" ]] || die "gradle-wrapper.properties not found in project"
 
-WORK="$HOME/authai_builds/${APPNAME,,}"
-APPDIR="$WORK/app"
-OUT="$WORK/out"
-KEYDIR="$HOME/keystores"
-KEYSTORE="$KEYDIR/authai_upload.jks"
-ALIAS="authaiupload"
+G_VER="$(grep -E 'distributionUrl=.*gradle-[0-9.]+' "$GW_PROP" | sed -n 's/.*gradle-\([0-9.]*\).*/\1/p' | head -n1 || true)"
+[[ -n "$G_VER" ]] || die "Cannot parse Gradle version from wrapper properties"
 
-rm -rf "$WORK"
-mkdir -p "$APPDIR/res/values" "$APPDIR/src/$PKG_PATH" "$OUT" "$KEYDIR"
+JAVA17="$PREFIX/lib/jvm/java-17-openjdk"
+JAVA21="$PREFIX/lib/jvm/java-21-openjdk"
 
-# -------------------- icon auto-detect + resize + mipmaps --------------------
-find_icon() {
-  # 1) If user passed a path, use it (relative to WORKDIR allowed)
-  if [[ -n "${ICON_ARG:-}" ]]; then
-    if [[ -f "$WORKDIR/$ICON_ARG" ]]; then echo "$WORKDIR/$ICON_ARG"; return 0; fi
-    if [[ -f "$ICON_ARG" ]]; then echo "$ICON_ARG"; return 0; fi
-    die "Icon not found: $ICON_ARG"
+pick_java() {
+  local v="$1"
+  if [[ "$(printf '%s\n%s\n' "8.5" "$v" | sort -V | head -n1)" == "8.5" ]]; then
+    [[ -d "$JAVA21" ]] && { echo "$JAVA21"; return 0; }
   fi
-
-  # 2) Look for icon.png in current folder
-  if [[ -f "$WORKDIR/icon.png" ]]; then echo "$WORKDIR/icon.png"; return 0; fi
-
-  # 3) Fallback: ~/icon.png
-  if [[ -f "$HOME/icon.png" ]]; then echo "$HOME/icon.png"; return 0; fi
-
+  [[ -d "$JAVA17" ]] && { echo "$JAVA17"; return 0; }
+  [[ -d "$JAVA21" ]] && { echo "$JAVA21"; return 0; }
   return 1
 }
 
-HAVE_ICON="false"
-ICON_ATTR=""
+JAVA_HOME_CHOSEN="$(pick_java "$G_VER" || true)"
+[[ -n "${JAVA_HOME_CHOSEN:-}" ]] || die "No Java found. Install: pkg install openjdk-17 (and/or openjdk-21)"
+export JAVA_HOME="$JAVA_HOME_CHOSEN"
+export PATH="$JAVA_HOME/bin:$PATH"
+log "Gradle wrapper=$G_VER -> Using JAVA_HOME=$JAVA_HOME"
 
-if [[ -n "${IM_TOOL:-}" ]]; then
-  ICON_PATH="$(find_icon 2>/dev/null || true)"
-  if [[ -n "${ICON_PATH:-}" ]]; then
-    log "icon: using $ICON_PATH"
+export GRADLE_USER_HOME="$STAGE/.gradle"
 
-    mkdir -p \
-      "$APPDIR/res/mipmap-mdpi" \
-      "$APPDIR/res/mipmap-hdpi" \
-      "$APPDIR/res/mipmap-xhdpi" \
-      "$APPDIR/res/mipmap-xxhdpi" \
-      "$APPDIR/res/mipmap-xxxhdpi"
+# Android SDK (fix 'SDK location not found')
+ensure_android_sdk() {
+  local sdk=""
 
-    ICON_512="$OUT/icon-512.png"
-
-    if [[ "$IM_TOOL" == "magick" ]]; then
-      magick "$ICON_PATH" -auto-orient -resize 512x512^ -gravity center -extent 512x512 "$ICON_512"
-    else
-      convert "$ICON_PATH" -auto-orient -resize 512x512^ -gravity center -extent 512x512 "$ICON_512"
-    fi
-
-    gen_icon() {
-      local size="$1"
-      local out="$2"
-      if [[ "$IM_TOOL" == "magick" ]]; then
-        magick "$ICON_512" -resize "${size}x${size}" "$out"
-      else
-        convert "$ICON_512" -resize "${size}x${size}" "$out"
-      fi
-    }
-
-    gen_icon 48  "$APPDIR/res/mipmap-mdpi/ic_launcher.png"
-    gen_icon 72  "$APPDIR/res/mipmap-hdpi/ic_launcher.png"
-    gen_icon 96  "$APPDIR/res/mipmap-xhdpi/ic_launcher.png"
-    gen_icon 144 "$APPDIR/res/mipmap-xxhdpi/ic_launcher.png"
-    gen_icon 192 "$APPDIR/res/mipmap-xxxhdpi/ic_launcher.png"
-
-    HAVE_ICON="true"
-    ICON_ATTR='android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher"'
+  if [[ -n "${ANDROID_HOME:-}" ]] && [[ -d "$ANDROID_HOME" ]]; then
+    sdk="$ANDROID_HOME"
+  elif [[ -n "${ANDROID_SDK_ROOT:-}" ]] && [[ -d "$ANDROID_SDK_ROOT" ]]; then
+    sdk="$ANDROID_SDK_ROOT"
+  elif [[ -d "$HOME/android-sdk" ]]; then
+    sdk="$HOME/android-sdk"
   fi
-fi
 
-# -------------------- Manifest --------------------
-# (includes versionCode/versionName + uses-sdk; icon only if available)
-cat > "$APPDIR/AndroidManifest.xml" <<MAN
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="$PKG"
-    android:versionCode="1"
-    android:versionName="1.0">
+  [[ -n "$sdk" ]] || die "Android SDK not found. Set ANDROID_HOME/ANDROID_SDK_ROOT or install to ~/android-sdk"
 
-    <uses-sdk
-        android:minSdkVersion="24"
-        android:targetSdkVersion="34" />
+  export ANDROID_HOME="$sdk"
+  export ANDROID_SDK_ROOT="$sdk"
 
-    <application
-        android:label="$APPNAME"
-        android:allowBackup="false"
-        $ICON_ATTR>
+  printf 'sdk.dir=%s\n' "$sdk" > "$STAGE/local.properties"
+  log "Using Android SDK: $sdk"
+}
 
-        <activity
-            android:name=".$PUBLIC_CLASS"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
+ensure_android_sdk
 
-    </application>
-</manifest>
-MAN
+# patch gradle.properties safely
+patch_gradle_properties() {
+  local gp="$STAGE/gradle.properties"
+  touch "$gp" 2>/dev/null || true
 
-cat > "$APPDIR/res/values/strings.xml" <<STR
-<resources>
-  <string name="app_name">$APPNAME</string>
-</resources>
-STR
+  if [[ -s "$gp" ]]; then
+    local lastchar
+    lastchar="$(tail -c 1 "$gp" 2>/dev/null || true)"
+    [[ -n "$lastchar" ]] && printf '\n' >> "$gp"
+  fi
 
-cp -f "$SRC" "$APPDIR/src/$PKG_PATH/$PUBLIC_CLASS.java"
+  local aapt2_bin
+  aapt2_bin="$(command -v aapt2 || true)"
+  if [[ -n "$aapt2_bin" ]]; then
+    if grep -q '^android\.aapt2FromMavenOverride=' "$gp" 2>/dev/null; then
+      sed -i "s|^android\.aapt2FromMavenOverride=.*|android.aapt2FromMavenOverride=$aapt2_bin|g" "$gp" || true
+    else
+      printf 'android.aapt2FromMavenOverride=%s\n' "$aapt2_bin" >> "$gp"
+    fi
+  fi
 
-log "aapt2 compile..."
-aapt2 compile --dir "$APPDIR/res" -o "$OUT/res.zip"
+  grep -q '^org\.gradle\.jvmargs=' "$gp" 2>/dev/null || printf 'org.gradle.jvmargs=-Xmx1024m\n' >> "$gp"
+}
 
-log "aapt2 link..."
-mkdir -p "$OUT/gen"
-aapt2 link \
-  -I "$PLAT" \
-  --manifest "$APPDIR/AndroidManifest.xml" \
-  --min-sdk-version 24 \
-  --target-sdk-version 34 \
-  --version-code 1 \
-  --version-name "1.0" \
-  --java "$OUT/gen" \
-  -o "$OUT/base.apk" \
-  "$OUT/res.zip"
+patch_gradle_properties
 
-log "javac..."
-mkdir -p "$OUT/classes"
-RJAVA="$OUT/gen/$PKG_PATH/R.java"
-[[ -f "$RJAVA" ]] || die "R.java not generated (package mismatch). Expected: $RJAVA"
+# icon injection (overwrite; avoid duplicate resources)
+inject_icon() {
+  local icon_path="${1:-}"
+  [[ -n "$icon_path" ]] || return 0
 
-javac -source 8 -target 8 \
-  -classpath "$PLAT" \
-  -d "$OUT/classes" \
-  "$APPDIR/src/$PKG_PATH/$PUBLIC_CLASS.java" \
-  "$RJAVA"
+  local icon_abs
+  icon_abs="$(abs_path "$icon_path")"
+  [[ -f "$icon_abs" ]] || die "Icon not found: $icon_abs"
 
-log "d8..."
-mapfile -t CLASS_FILES < <(find "$OUT/classes" -type f -name "*.class")
-[[ "${#CLASS_FILES[@]}" -gt 0 ]] || die "No .class files produced."
+  local res="$STAGE/app/src/main/res"
+  [[ -d "$res" ]] || die "Expected Android app module at: $res (no app/src/main/res)"
 
-if [[ -x "$D8BIN" ]]; then
-  "$D8BIN" --min-api 24 --lib "$PLAT" --output "$OUT" "${CLASS_FILES[@]}"
+  # wipe existing launcher resources inside STAGE to avoid duplicates
+  find "$res" -type f \( \
+      -name 'ic_launcher.*' \
+      -o -name 'ic_launcher_round.*' \
+      -o -name 'ic_launcher_foreground.*' \
+      -o -name 'ic_launcher_background.*' \
+    \) -path '*/mipmap*/*' -delete 2>/dev/null || true
+
+  find "$res" -type f -name 'ic_launcher*.xml' -path '*/mipmap-anydpi-*/*' -delete 2>/dev/null || true
+
+  log "Using icon: $icon_abs"
+
+  mkdir -p "$res/mipmap-mdpi-v4" "$res/mipmap-hdpi-v4" "$res/mipmap-xhdpi-v4" \
+           "$res/mipmap-xxhdpi-v4" "$res/mipmap-xxxhdpi-v4"
+
+  local tmp="$STAGE/.authai_icon_512.png"
+
+  if command -v magick >/dev/null 2>&1; then
+    magick "$icon_abs" -auto-orient -resize 512x512^ -gravity center -extent 512x512 "$tmp"
+    magick "$tmp" -resize 48x48   "$res/mipmap-mdpi-v4/ic_launcher.png"
+    magick "$tmp" -resize 72x72   "$res/mipmap-hdpi-v4/ic_launcher.png"
+    magick "$tmp" -resize 96x96   "$res/mipmap-xhdpi-v4/ic_launcher.png"
+    magick "$tmp" -resize 144x144 "$res/mipmap-xxhdpi-v4/ic_launcher.png"
+    magick "$tmp" -resize 192x192 "$res/mipmap-xxxhdpi-v4/ic_launcher.png"
+  elif command -v convert >/dev/null 2>&1; then
+    convert "$icon_abs" -auto-orient -resize 512x512^ -gravity center -extent 512x512 "$tmp"
+    convert "$tmp" -resize 48x48   "$res/mipmap-mdpi-v4/ic_launcher.png"
+    convert "$tmp" -resize 72x72   "$res/mipmap-hdpi-v4/ic_launcher.png"
+    convert "$tmp" -resize 96x96   "$res/mipmap-xhdpi-v4/ic_launcher.png"
+    convert "$tmp" -resize 144x144 "$res/mipmap-xxhdpi-v4/ic_launcher.png"
+    convert "$tmp" -resize 192x192 "$res/mipmap-xxxhdpi-v4/ic_launcher.png"
+  else
+    die "ImageMagick not installed (needed for --icon): pkg install imagemagick"
+  fi
+
+  rm -f "$tmp" 2>/dev/null || true
+}
+
+inject_icon "${ICON:-}"
+
+# build
+TRACE="$HOME/authai_trace.txt"
+rm -f "$TRACE" 2>/dev/null || true
+
+log "Running ./gradlew assembleDebug (logs -> $TRACE)"
+if ./gradlew assembleDebug --no-daemon >"$TRACE" 2>&1; then
+  APK_PATH="$(find "$STAGE" -type f -name "*.apk" \
+    -path "*/build/outputs/apk/*" \
+    -not -path "*/build-cache/*" \
+    -not -path "*/androidTest/*" \
+    -not -name "*unaligned*" | head -n 1 || true)"
+
+  [[ -f "${APK_PATH:-}" ]] || die "Build finished but APK not located. Check $TRACE"
+
+  OUTDIR="$HOME/authai_builds/$SAFE_ID"
+  mkdir -p "$OUTDIR"
+  FINAL="$OUTDIR/${SAFE_ID}-debug.apk"
+  cp -f "$APK_PATH" "$FINAL"
+
+  log "OK -> $FINAL"
+  echo
+  echo "Next:"
+  echo "  cp -f \"$FINAL\" \"$HOME/storage/downloads/\""
+  echo "  termux-open \"$HOME/storage/downloads/$(basename "$FINAL")\""
+  exit 0
 else
-  java -cp "$D8JAR" com.android.tools.r8.D8 --min-api 24 --lib "$PLAT" --output "$OUT" "${CLASS_FILES[@]}"
+  echo "------ Gradle failed (tail) ------" >&2
+  tail -n 80 "$TRACE" >&2 || true
+  echo "---------------------------------" >&2
+  die "Gradle build failed. See: $TRACE"
 fi
-[[ -f "$OUT/classes.dex" ]] || die "classes.dex was not produced."
-
-log "packaging..."
-cp -f "$OUT/base.apk" "$OUT/unsigned.apk"
-zip -q -j "$OUT/unsigned.apk" "$OUT/classes.dex"
-
-log "zipalign..."
-zipalign -f 4 "$OUT/unsigned.apk" "$OUT/aligned.apk"
-
-mkdir -p "$KEYDIR"
-if [[ ! -f "$KEYSTORE" ]]; then
-  log "creating keystore..."
-  keytool -genkeypair -v \
-    -keystore "$KEYSTORE" \
-    -alias "$ALIAS" \
-    -keyalg RSA -keysize 2048 -validity 10000 \
-    -dname "CN=Authai,O=Authai"
-else
-  log "using existing keystore: $KEYSTORE"
-fi
-
-log "signing..."
-FINAL="$WORK/${APPNAME,,}-signed.apk"
-"$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias "$ALIAS" --out "$FINAL" "$OUT/aligned.apk"
-
-log "verifying..."
-"$APKSIGNER" verify --verbose "$FINAL" >/dev/null || die "apksigner verify failed"
-zipalign -c -v 4 "$FINAL" >/dev/null || die "zipalign verify failed"
-
-log "OK -> $FINAL"
-
-echo
-echo "Next:"
-echo "  Copy to Downloads:"
-echo "    cp -f \"$FINAL\" \"$HOME/storage/downloads/\""
-echo
-echo "  Install (GUI):"
-echo "    termux-open \"$HOME/storage/downloads/$(basename "$FINAL")\""
-echo
-echo "  Verify (optional):"
-echo "    BT=\"\$(ls -1d \\\"$HOME/android-sdk/build-tools/\\\"* | sort -V | tail -n 1)\""
-echo "    \"\$BT/apksigner\" verify --verbose --print-certs \"$FINAL\""
-echo "    zipalign -c -v 4 \"$FINAL\""
-echo "    aapt2 dump badging \"$FINAL\" | egrep -i 'package:|versionCode|versionName|sdkVersion|targetSdkVersion|launchable-activity'"
-echo "    unzip -t \"$FINAL\" | tail -n 5"
 AUTHAI_EOF
-chmod +x "$AUTH_BIN"
 
-# -------------------- write authai-uninstall --------------------
-log "Writing uninstall to: $UNINSTALL_BIN"
-cat > "$UNINSTALL_BIN" <<'UN_EOF'
-#!/data/data/com.termux/files/usr/bin/bash
-set -euo pipefail
-IFS=$'\n\t'
+  chmod +x "$AUTH_DST"
+  log "Installed -> $AUTH_DST"
+  log "Try: authai --help"
+}
 
-log(){ echo "[Authai-Uninstall] $*"; }
+uninstall(){
+  if [[ -f "$AUTH_DST" ]]; then
+    rm -f "$AUTH_DST"
+    log "Removed -> $AUTH_DST"
+  else
+    log "Nothing to remove."
+  fi
+}
 
-PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
-AUTH_BIN="$PREFIX/bin/authai"
-UNINSTALL_BIN="$PREFIX/bin/authai-uninstall"
-PURGE="${1:-}"
-
-log "Removing binaries..."
-rm -f "$AUTH_BIN" "$UNINSTALL_BIN" 2>/dev/null || true
-
-log "Removing builds..."
-rm -rf "$HOME/authai_builds" 2>/dev/null || true
-
-if [[ "$PURGE" == "--purge" ]]; then
-  log "PURGE: removing keystore + android-sdk..."
-  rm -rf "$HOME/keystores" "$HOME/.authai" "$HOME/android-sdk" 2>/dev/null || true
-else
-  log "Keeping keystore + android-sdk."
-  log "To remove everything: authai-uninstall --purge"
-fi
-
-log "Done ✅"
-UN_EOF
-chmod +x "$UNINSTALL_BIN"
-
-hash -r || true
-log "Installed ✅"
-echo "Run:"
-echo "  authai File.java AppName [package.name] [icon.png]"
-echo
-echo "Icon behavior:"
-echo "  - If you pass icon.png as 4th arg, it will be used."
-echo "  - Else, Authai will try: ./icon.png then ~/icon.png"
-echo "  - Any PNG size/name works; it is auto-converted and set as launcher icon."
-echo
-echo "Uninstall:"
-echo "  authai-uninstall"
-echo "  authai-uninstall --purge"
-echo "  ./install-authai.sh uninstall [--purge]"
+case "$cmd" in
+  install) install ;;
+  uninstall) uninstall ;;
+  doctor) doctor ;;
+  *) usage; exit 1 ;;
+esac
