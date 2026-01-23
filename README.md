@@ -41,7 +41,7 @@ It **never modifies your original project**.
 
 ## Optional (only if using `--icon`)
 - **ImageMagick** (`magick` or `convert`)  
-  Install: `pkg install imagemagick`
+  Install: ```pkg install imagemagick```
 
 ---
 
@@ -52,6 +52,7 @@ You install Authai via the installer script shown in your final code:
 ```
 chmod +x install-authai.sh
 ./install-authai.sh install
+```
 
 This writes the CLI to:
 
@@ -59,17 +60,17 @@ $PREFIX/bin/authai
 
 
 Verify:
-
+```
 command -v authai
 authai --help
-
+```
 
 ---
 
 Doctor (dependency check)
-
+```
 ./install-authai.sh doctor
-
+```
 Checks:
 
 bash, python (optional), java, aapt2 (recommended), ImageMagick (optional)
@@ -80,9 +81,9 @@ Android SDK location via env vars or ~/android-sdk
 ---
 
 Usage
-
+```
 authai <project_dir> --name <AppName> --pkg <com.example.app> [--icon /path/icon.png]
-
+```
 Example:
 
 authai "$HOME/android-simple-calculator" \
@@ -128,9 +129,9 @@ prevents the Duplicate resources error that happens when both .png and .webp var
 ---
 
 Uninstall
-
+```
 ./install-authai.sh uninstall
-
+```
 Removes:
 
 $PREFIX/bin/authai
