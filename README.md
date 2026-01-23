@@ -50,6 +50,14 @@ It **never modifies your original project**.
 git clone https://github.com/git5loxosec/Authai.git
 ```
 
+---
+
+# ⚠️ Disk Space warning
+
+Authai requires ~1.2 GB installed and 4–5 GB free recommended during APK builds.
+
+---
+
 # Install
 
 You install Authai via the installer script shown in your final code:
@@ -69,6 +77,7 @@ Verify:
 command -v authai
 authai --help
 ```
+
 
 ---
 
