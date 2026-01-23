@@ -45,6 +45,11 @@ It **never modifies your original project**.
 
 ---
 
+# Download
+```
+git clone https://github.com/git5loxosec/Authai.git
+```
+
 # Install
 
 You install Authai via the installer script shown in your final code:
