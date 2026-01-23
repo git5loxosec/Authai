@@ -1,4 +1,6 @@
-# 🐘 Authai — Android APK Builder (Termux)
+# 🐘 Authai — Android APK Builder (Termux) *
+
+### Works on Android 15!
 
 Authai is a small Termux-first CLI that builds a debug APK from an existing Gradle Wrapper Android project.  
 It stages (copies) your project into a clean workspace, applies a few Termux compatibility tweaks, optionally injects a launcher icon, then runs `./gradlew assembleDebug`.
